@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Astronauta a la deriva</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0}
+body{background:#05060f;color:#e8e8f0;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+canvas{background:#0a0d24;border-radius:12px;max-width:94vw;max-height:80vh;aspect-ratio:1;touch-action:none}
+p{margin:0;font-size:14px;opacity:.7}
+</style>
+</head>
+<body>
+<canvas id="c" width="480" height="480"></canvas>
+<p>Flechas o WASD para empujar · M: sonido on/off · Espacio para empezar/reiniciar · La gravedad cambia cada 5 s</p>
+<script>
+const c=document.getElementById('c'),x=c.getContext('2d'),W=480,R=11;
+const dirs=[[0,1],[0,-1],[-1,0],[1,0]],arrows=['↓','↑','←','→'];
+let best=0;try{best=+localStorage.getItem('gc-best')||0}catch(e){}
+let p,g,next,tg,obs,warns,spawn,score,state='menu',last=0,time=0;
+const keys={};
+const stars=Array.from({length:70},()=>({x:Math.random()*W,y:Math.random()*W,s:Math.random()*1.5+.5,f:Math.random()*6}));
+let ac,master,on=true,step=0,nextT=0;
+function initAudio(){try{if(!ac){ac=new(window.AudioContext||window.webkitAudioContext)();master=ac.createGain();master.gain.value=on?vol*1.25:0;const cp=ac.createDynamicsCompressor();master.connect(cp);cp.connect(ac.destination)}if(ac.state==='suspended')ac.resume()}catch(e){ac=null}}
+function tone(f,t,d,type,v,f2){const o=ac.createOscillator(),gn=ac.createGain();o.type=type;o.frequency.setValueAtTime(f,t);if(f2)o.frequency.exponentialRampToValueAtTime(f2,t+d);gn.gain.setValueAtTime(v,t);gn.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(gn);gn.connect(master);o.start(t);o.stop(t+d)}
+function noise(t,d,v){const n=ac.sampleRate*d,b=ac.createBuffer(1,n,ac.sampleRate),a=b.getChannelData(0);for(let i=0;i<n;i++)a[i]=Math.random()*2-1;const s=ac.createBufferSource(),gn=ac.createGain();s.buffer=b;gn.gain.setValueAtTime(v,t);gn.gain.exponentialRampToValueAtTime(.001,t+d);s.connect(gn);gn.connect(master);s.start(t)}
+const lvl=()=>Math.min(4,Math.floor(score/12));
+const roots=[110,87.31,130.81,98],thirds=[1.2,1.25,1.25,1.25];
+function stepDur(){return 60/(100+lvl()*18)/2}
+function playStep(t){
+ const L=lvl(),r=roots[Math.floor(step/8)%4],th=thirds[Math.floor(step/8)%4],s=step%8;
+ if(s%2===0)tone(r/2,t,stepDur()*1.8,'triangle',1);
+ if(L>=1)tone(r*(L>=3?4:2)*[1,th,1.5,2][s%4],t,stepDur()*.9,'square',.2);
+ if(L>=2&&s%2===1)noise(t,.05,.35);
+ if(L>=3&&s%2===0)tone(120,t,.12,'sine',1,40);
+ if(L>=4&&s%2===1)tone(r*4*1.5,t,stepDur(),'sine',.3);
+ step++;
+}
+setInterval(()=>{if(!ac||state!=='play')return;while(nextT<ac.currentTime+.12){playStep(nextT);nextT+=stepDur()}},30);
+function dieSound(){if(!ac)return;const t=ac.currentTime+.01;tone(500,t,.9,'sawtooth',.4,35);tone(90,t,.6,'sine',.8,30);noise(t,.5,.5)}
+let hits=[],skin=0,vol=.8,dragging=null;
+function sv(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+try{const a=localStorage.getItem('gc-vol'),b=localStorage.getItem('gc-skin');if(a!==null)vol=+a;if(b!==null)skin=+b}catch(e){}
+const SK=[{n:'Clásico',b:'#fff',v:'#2b6fd6',p:'#b8c0d0'},{n:'Naranja',b:'#ff9a3c',v:'#1b2a4a',p:'#c46a14'},{n:'Verde',b:'#6ee7b7',v:'#10324a',p:'#2f9e7a'},{n:'Rosa',b:'#ff8fc7',v:'#3a1d5c',p:'#c0568f'},{n:'Oro',b:'#ffd84a',v:'#3b2a00',p:'#b8901a'}];
+const deco={r:22,x:62,y:250,a:0,pts:[.9,.8,1,.85,.95,.8,1,.9,.85],cr:[[.2,-.2,.25],[-.3,.25,.18]]};
+function setVol(v){vol=Math.max(0,Math.min(1,v));if(master&&on)master.gain.value=vol*1.25;sv('gc-vol',vol)}
+function dk(){return new Date().toDateString()}
+function wk(){const d=new Date();d.setDate(d.getDate()-((d.getDay()+6)%7));return d.toDateString()}
+function getRec(k,key){try{const o=JSON.parse(localStorage.getItem(k)||'null');return o&&o.k===key?o.v:0}catch(e){return 0}}
+function saveScore(){
+ if(score>best){best=score;sv('gc-best',best)}
+ [['gc-day',dk()],['gc-week',wk()]].forEach(([k,key])=>{if(score>getRec(k,key))sv(k,JSON.stringify({k:key,v:score}))});
+}
+function button(bx,by,bw,bh,label,fn,primary){
+ hits.push({x:bx,y:by,w:bw,h:bh,fn});
+ x.fillStyle=primary?'#6ee7b7':'rgba(255,255,255,.1)';x.strokeStyle=primary?'#6ee7b7':'rgba(255,255,255,.35)';x.lineWidth=2;
+ x.beginPath();x.roundRect(bx,by,bw,bh,10);x.fill();x.stroke();
+ x.fillStyle=primary?'#05211a':'#e8e8f0';x.font=(primary?'bold 24px':'bold 17px')+' system-ui';x.textAlign='center';x.textBaseline='middle';x.fillText(label,bx+bw/2,by+bh/2+1);x.textBaseline='alphabetic';
+}
+function drawUI(){
+ const fm=v=>v.toFixed(1)+' s';
+ x.textAlign='center';
+ if(state==='menu'){
+  x.shadowColor='#6ee7b7';x.shadowBlur=20;x.font='bold 54px system-ui';
+  x.fillStyle='#fff';x.fillText('ASTRONAUTA',W/2,92);
+  x.fillStyle='#6ee7b7';x.fillText('A LA DERIVA',W/2,148);x.shadowBlur=0;
+  drawAstro(425,215+Math.sin(time*2)*6,1.9,SK[skin]);
+  deco.a=time;deco.y=250+Math.cos(time*1.5)*5;drawMeteor(deco);
+  button(130,180,220,52,'JUGAR',reset,1);
+  button(130,244,220,40,'CAMBIAR SKIN',()=>state='skins');
+  button(130,294,220,40,'TUTORIAL',()=>state='tutorial');
+  const sx=125,sw=260;
+  x.fillStyle='#aab';x.font='15px system-ui';x.textAlign='left';x.fillText('Volumen',40,380);
+  x.fillStyle='rgba(255,255,255,.2)';x.fillRect(sx,372,sw,6);
+  x.fillStyle='#6ee7b7';x.fillRect(sx,372,sw*vol,6);
+  x.beginPath();x.arc(sx+sw*vol,375,9,0,7);x.fillStyle='#fff';x.fill();
+  x.fillStyle='#aab';x.textAlign='right';x.fillText(Math.round(vol*100)+'%',W-30,380);
+  hits.push({x:sx-10,y:355,w:sw+20,h:40,drag:1,fn:px=>setVol((px-sx)/sw)});
+  const R3=[['HOY',getRec('gc-day',dk())],['SEMANA',getRec('gc-week',wk())],['HISTÓRICO',best]];
+  R3.forEach((r,i)=>{const cx=90+i*150;x.textAlign='center';x.fillStyle='#8899bb';x.font='12px system-ui';x.fillText('RÉCORD '+r[0],cx,425);x.fillStyle='#ffd84a';x.font='bold 22px system-ui';x.fillText(fm(r[1]),cx,452)});
+ }
+ if(state==='skins'){
+  x.fillStyle='#fff';x.font='bold 32px system-ui';x.fillText('ELIGE TU SKIN',W/2,70);
+  SK.forEach((s,i)=>{const bx=20+i*90,by=120;
+   hits.push({x:bx,y:by,w:80,h:150,fn:()=>{skin=i;sv('gc-skin',i)}});
+   x.fillStyle='rgba(255,255,255,.08)';x.strokeStyle=i===skin?'#6ee7b7':'rgba(255,255,255,.2)';x.lineWidth=i===skin?3:1;
+   x.beginPath();x.roundRect(bx,by,80,150,10);x.fill();x.stroke();
+   drawAstro(bx+40,by+62+Math.sin(time*2+i)*3,2.2,s);
+   x.fillStyle=i===skin?'#6ee7b7':'#cde';x.font='14px system-ui';x.textAlign='center';x.fillText(s.n,bx+40,by+130)});
+  button(130,340,220,44,'VOLVER',()=>state='menu');
+ }
+ if(state==='tutorial'){
+  x.fillStyle='#fff';x.font='bold 34px system-ui';x.fillText('TUTORIAL',W/2,62);
+  const L=['Muévete con las flechas o WASD para empujarte.','La gravedad te arrastra y cambia cada 5 s.','En el último segundo verás la próxima dirección.','Un destello rojo en el borde avisa de un meteorito.','Cuanto más aguantes, menos aviso y más velocidad.','Cada 12 s la música sube de nivel.','M: silenciar  ·  Esc: volver al menú.'];
+  x.textAlign='left';x.font='16px system-ui';
+  L.forEach((t,i)=>{x.fillStyle='#6ee7b7';x.fillText((i+1)+'.',34,112+i*38);x.fillStyle='#e8e8f0';x.fillText(t,62,112+i*38)});
+  button(130,396,220,44,'VOLVER',()=>state='menu');
+ }
+}
+function reset(){initAudio();if(ac)nextT=ac.currentTime+.05;step=0;p={x:W/2,y:W/2,vx:0,vy:0};g=0;next=1;tg=5;obs=[];warns=[];spawn=1;score=0;state='play'}
+function pick(){let n;do{n=Math.floor(Math.random()*4)}while(n===g);return n}
+addEventListener('keydown',e=>{
+ if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
+ keys[e.key.toLowerCase()]=1;
+ if(e.key.toLowerCase()==='m'){on=!on;if(master)master.gain.value=on?vol*1.25:0}
+ if(e.key===' '&&(state==='menu'||state==='over'))reset();if(e.key==='Escape')state='menu';
+});
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=0);
+function pt(e){const r=c.getBoundingClientRect();return[(e.clientX-r.left)*W/r.width,(e.clientY-r.top)*W/r.height]}
+c.addEventListener('pointerdown',e=>{const[px,py]=pt(e);for(const h of hits){if(px>=h.x&&px<=h.x+h.w&&py>=h.y&&py<=h.y+h.h){initAudio();if(h.drag){dragging=h;h.fn(px)}else h.fn();break}}});
+addEventListener('pointermove',e=>{if(dragging)dragging.fn(pt(e)[0])});
+addEventListener('pointerup',()=>{if(dragging&&ac)tone(440,ac.currentTime,.12,'sine',.5);dragging=null});
+function hit(o){return (p.x-o.x)**2+(p.y-o.y)**2<(R+o.r*0.8)**2}
+function makeMeteor(side){
+ const r=14+Math.random()*16,v=(1.8+Math.random()*1.5+score/25)*60;
+ const o={r,x:0,y:0,vx:0,vy:0,a:Math.random()*6,spin:(Math.random()-.5)*3,side,
+  pts:Array.from({length:9},()=>.75+Math.random()*.25),
+  cr:[[.2,-.2,.25],[-.3,.25,.18]]};
+ if(side===0){o.x=-r;o.y=30+Math.random()*(W-60);o.vx=v}
+ else if(side===1){o.x=W+r;o.y=30+Math.random()*(W-60);o.vx=-v}
+ else{o.x=30+Math.random()*(W-60);o.y=-r;o.vy=v}
+ return o;
+}
+function update(dt){
+ const k=dt*60;
+ score+=dt;tg-=dt;
+ if(tg<=0){g=next;next=pick();tg=5}
+ const ix=(keys.arrowright||keys.d?1:0)-(keys.arrowleft||keys.a?1:0);
+ const iy=(keys.arrowdown||keys.s?1:0)-(keys.arrowup||keys.w?1:0);
+ p.vx+=(dirs[g][0]*0.25+ix*0.2)*k;
+ p.vy+=(dirs[g][1]*0.25+iy*0.2)*k;
+ p.vx*=0.995;p.vy*=0.995;
+ p.x+=p.vx*k;p.y+=p.vy*k;
+ if(p.x<R){p.x=R;p.vx*=-0.5}if(p.x>W-R){p.x=W-R;p.vx*=-0.5}
+ if(p.y<R){p.y=R;p.vy*=-0.5}if(p.y>W-R){p.y=W-R;p.vy*=-0.5}
+ spawn-=dt;
+ if(spawn<=0){
+  spawn=Math.max(0.3,1.0-score/60);
+  const o=makeMeteor(Math.random()*3|0);
+  // aviso: cada vez más corto cuanto más avanzas
+  const t=Math.max(0.25,1.3-score/35);
+  warns.push({o,t,max:t});
+ }
+ for(const w of warns)w.t-=dt;
+ warns.filter(w=>w.t<=0).forEach(w=>obs.push(w.o));
+ warns=warns.filter(w=>w.t>0);
+ obs.forEach(o=>{o.x+=o.vx*dt;o.y+=o.vy*dt;o.a+=o.spin*dt});
+ obs=obs.filter(o=>o.x>-80&&o.x<W+80&&o.y>-80&&o.y<W+80);
+ if(obs.some(hit)){state='over';dieSound();saveScore();}
+}
+function text(t,s,y,col='#e8e8f0'){x.fillStyle=col;x.font=s+'px system-ui';x.textAlign='center';x.fillText(t,W/2,y)}
+function drawStars(){stars.forEach(s=>{x.globalAlpha=.4+.6*Math.abs(Math.sin(time*1.5+s.f));x.fillStyle='#fff';x.fillRect(s.x,s.y,s.s,s.s)});x.globalAlpha=1}
+function drawMeteor(o){
+ x.save();x.translate(o.x,o.y);x.rotate(o.a);
+ x.beginPath();o.pts.forEach((m,i)=>{const a=i/o.pts.length*Math.PI*2;const px=Math.cos(a)*o.r*m,py=Math.sin(a)*o.r*m;i?x.lineTo(px,py):x.moveTo(px,py)});
+ x.closePath();x.fillStyle='#7a6a5d';x.fill();x.strokeStyle='#4a3f37';x.lineWidth=2;x.stroke();
+ x.fillStyle='#5a4d43';o.cr.forEach(q=>{x.beginPath();x.arc(q[0]*o.r,q[1]*o.r,q[2]*o.r,0,7);x.fill()});
+ x.restore();
+}
+function drawWarn(w){
+ const o=w.o,prog=1-w.t/w.max,on=Math.floor(prog*8)%2===0;
+ x.globalAlpha=on?.55+.3*prog:.2;
+ let gr;
+ if(o.side===0){gr=x.createLinearGradient(0,0,60,0);gr.addColorStop(0,'#ff2a3d');gr.addColorStop(1,'rgba(255,42,61,0)');x.fillStyle=gr;x.fillRect(0,o.y-o.r-8,60,o.r*2+16)}
+ else if(o.side===1){gr=x.createLinearGradient(W,0,W-60,0);gr.addColorStop(0,'#ff2a3d');gr.addColorStop(1,'rgba(255,42,61,0)');x.fillStyle=gr;x.fillRect(W-60,o.y-o.r-8,60,o.r*2+16)}
+ else{gr=x.createLinearGradient(0,0,0,60);gr.addColorStop(0,'#ff2a3d');gr.addColorStop(1,'rgba(255,42,61,0)');x.fillStyle=gr;x.fillRect(o.x-o.r-8,0,o.r*2+16,60)}
+ x.globalAlpha=1;
+}
+function drawAstro(px=p&&p.x,py=p&&p.y,sc=1,sk=SK[skin]){
+ x.save();x.translate(px,py);x.scale(sc,sc);
+ x.fillStyle=sk.p;x.fillRect(-R-3,-R*.5,6,R);            // mochila
+ x.fillStyle=sk.b;x.beginPath();x.arc(0,0,R,0,7);x.fill();   // casco
+ x.fillStyle=sk.v;x.beginPath();x.ellipse(1,0,R*.62,R*.5,0,0,7);x.fill(); // visor
+ x.fillStyle='rgba(255,255,255,.7)';x.beginPath();x.arc(-1,-3,2,0,7);x.fill();
+ x.restore();
+}
+function draw(){
+ x.clearRect(0,0,W,W);hits=[];drawStars();
+ if(state!=='play'&&state!=='over'){drawUI();return}
+ if(false){text('Astronauta a la deriva',30,200);text('Esquiva los meteoritos. La gravedad cambia sola.',15,240,'#aab');text('Pulsa ESPACIO o toca para empezar',16,280,'#8cf');return}
+ if(tg<1.2&&state==='play'&&Math.floor(tg*6)%2===0)text('Próxima: '+arrows[next],40,W/2+14,'rgba(255,200,80,.3)');
+ warns.forEach(drawWarn);
+ obs.forEach(drawMeteor);
+ drawAstro();
+ x.textAlign='left';x.fillStyle='#e8e8f0';x.font='16px system-ui';
+ x.fillText('Tiempo: '+score.toFixed(1)+' s',12,24);
+ x.textAlign='right';x.fillText('Récord: '+best.toFixed(1)+' s',W-12,24);
+ text('Gravedad '+arrows[g],16,W-14,'#aab');
+ if(state==='over'){x.fillStyle='rgba(5,6,15,.78)';x.fillRect(0,0,W,W);text('¡Meteorito!',36,210);text(score.toFixed(1)+' s',22,250,'#6ee7b7');if(score>=best)text('¡Nuevo récord!',16,276,'#ffd84a');button(130,288,220,44,'REINTENTAR',reset,1);button(130,342,220,38,'MENÚ',()=>state='menu')}
+}
+function loop(t){
+ const dt=Math.min(0.05,(t-last)/1000||0);last=t;time+=dt;
+ if(state==='play')update(dt);
+ draw();requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
